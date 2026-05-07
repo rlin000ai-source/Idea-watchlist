@@ -1,0 +1,55 @@
+:root {
+  --bg: #0a0e1a;
+  --surface: #111827;
+  --surface-2: #1f2937;
+  --border: #374151;
+  --accent: #3b82f6;
+  --green: #10b981;
+  --red: #ef4444;
+  --amber: #f59e0b;
+  --purple: #8b5cf6;
+  --text: #f9fafb;
+  --text-sec: #9ca3af;
+  --text-muted: #6b7280;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "IBM Plex Sans", "Inter", system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  font-feature-settings: "tnum", "ss01";
+}
+
+.mono {
+  font-family: "IBM Plex Mono", "JetBrains Mono", ui-monospace, monospace;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+input, textarea, select {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover { text-decoration: underline; }
