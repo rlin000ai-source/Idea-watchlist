@@ -2,7 +2,10 @@ import { Redis } from "@upstash/redis";
 import type { Watchlist, Entry } from "./types";
 import { entryKey } from "./validate";
 
-const redis = Redis.fromEnv();
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL ?? process.env.KV_REST_API_URL!,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN ?? process.env.KV_REST_API_TOKEN!,
+});
 const KEY = "watchlist:v1";
 
 const EMPTY: Watchlist = {
