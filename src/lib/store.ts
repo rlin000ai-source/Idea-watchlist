@@ -1,41 +1,82 @@
-import { Redis } from "@upstash/redis";
+import { createClient } from "@supabase/supabase-js";
 import type { Watchlist, Entry } from "./types";
-import { entryKey } from "./validate";
 
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL ?? process.env.KV_REST_API_URL!,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN ?? process.env.KV_REST_API_TOKEN!,
-});
-const KEY = "watchlist:v1";
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  { auth: { persistSession: false } },
+);
 
-const EMPTY: Watchlist = {
-  schema_version: "1.0",
-  last_updated: new Date().toISOString().slice(0, 10),
-  entries: [],
-};
+const TABLE = "watchlist_entries";
+
+type Row = Entry & { id: string; created_at: string; updated_at: string };
+
+function rowToEntry(r: Row): Entry {
+  return {
+    ticker: r.ticker,
+    exchange: r.exchange,
+    currency: r.currency,
+    analysis_date: r.analysis_date,
+    anchor_price: Number(r.anchor_price),
+    bull_target: Number(r.bull_target),
+    base_target: Number(r.base_target),
+    bear_target: Number(r.bear_target),
+    thesis_oneliner: r.thesis_oneliner,
+    catalysts: Array.isArray(r.catalysts) ? r.catalysts : [],
+    source_url: r.source_url ?? undefined,
+    tags: Array.isArray(r.tags) ? r.tags : undefined,
+    closed_date: r.closed_date ?? undefined,
+    closed_reason: r.closed_reason ?? undefined,
+  };
+}
+
+function entryToRow(e: Entry) {
+  return {
+    ticker: e.ticker.toUpperCase(),
+    exchange: e.exchange.toUpperCase(),
+    currency: e.currency,
+    analysis_date: e.analysis_date,
+    anchor_price: e.anchor_price,
+    bull_target: e.bull_target,
+    base_target: e.base_target,
+    bear_target: e.bear_target,
+    thesis_oneliner: e.thesis_oneliner,
+    catalysts: e.catalysts,
+    source_url: e.source_url ?? null,
+    tags: e.tags ?? null,
+    closed_date: e.closed_date ?? null,
+    closed_reason: e.closed_reason ?? null,
+  };
+}
 
 export async function loadWatchlist(): Promise<Watchlist> {
-  const data = await redis.get<Watchlist>(KEY);
-  if (!data) return { ...EMPTY };
-  // Defensive: ensure entries array exists
-  if (!Array.isArray(data.entries)) data.entries = [];
-  return data;
+  const { data, error } = await supabase
+    .from(TABLE)
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(`Supabase load failed: ${error.message}`);
+  const rows = (data ?? []) as Row[];
+  const entries = rows.map(rowToEntry);
+  const lastUpdated =
+    rows.length > 0
+      ? rows.map((r) => r.updated_at).sort().slice(-1)[0].slice(0, 10)
+      : new Date().toISOString().slice(0, 10);
+  return { schema_version: "1.0", last_updated: lastUpdated, entries };
 }
 
-export async function saveWatchlist(wl: Watchlist): Promise<void> {
-  wl.last_updated = new Date().toISOString().slice(0, 10);
-  await redis.set(KEY, wl);
-}
-
-export async function addEntry(entry: Entry): Promise<{ added: true } | { added: false; reason: string }> {
-  const wl = await loadWatchlist();
-  const key = entryKey(entry);
-  const existing = wl.entries.find((e) => entryKey(e) === key);
-  if (existing) {
-    return { added: false, reason: `Entry already exists for ${entry.ticker} on ${entry.exchange}` };
+export async function addEntry(
+  entry: Entry,
+): Promise<{ added: true } | { added: false; reason: string }> {
+  const { error } = await supabase.from(TABLE).insert(entryToRow(entry));
+  if (error) {
+    if (error.code === "23505") {
+      return {
+        added: false,
+        reason: `Entry already exists for ${entry.ticker} on ${entry.exchange}`,
+      };
+    }
+    throw new Error(`Supabase insert failed: ${error.message}`);
   }
-  wl.entries.push(entry);
-  await saveWatchlist(wl);
   return { added: true };
 }
 
@@ -43,14 +84,16 @@ export async function removeEntry(
   ticker: string,
   exchange: string,
 ): Promise<{ removed: true } | { removed: false; reason: string }> {
-  const wl = await loadWatchlist();
-  const key = entryKey({ ticker, exchange });
-  const before = wl.entries.length;
-  wl.entries = wl.entries.filter((e) => entryKey(e) !== key);
-  if (wl.entries.length === before) {
+  const { data, error } = await supabase
+    .from(TABLE)
+    .delete()
+    .eq("ticker", ticker.toUpperCase())
+    .eq("exchange", exchange.toUpperCase())
+    .select();
+  if (error) throw new Error(`Supabase delete failed: ${error.message}`);
+  if (!data || data.length === 0) {
     return { removed: false, reason: `No entry found for ${ticker} on ${exchange}` };
   }
-  await saveWatchlist(wl);
   return { removed: true };
 }
 
@@ -59,13 +102,29 @@ export async function updateEntry(
   exchange: string,
   patch: Partial<Entry>,
 ): Promise<{ updated: true; entry: Entry } | { updated: false; reason: string }> {
-  const wl = await loadWatchlist();
-  const key = entryKey({ ticker, exchange });
-  const idx = wl.entries.findIndex((e) => entryKey(e) === key);
-  if (idx === -1) {
+  const patchRow: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === undefined) continue;
+    if (k === "ticker" || k === "exchange") {
+      patchRow[k] = String(v).toUpperCase();
+    } else {
+      patchRow[k] = v;
+    }
+  }
+  const { data, error } = await supabase
+    .from(TABLE)
+    .update(patchRow)
+    .eq("ticker", ticker.toUpperCase())
+    .eq("exchange", exchange.toUpperCase())
+    .select();
+  if (error) {
+    if (error.code === "23505") {
+      return { updated: false, reason: `Updated values would collide with another entry` };
+    }
+    throw new Error(`Supabase update failed: ${error.message}`);
+  }
+  if (!data || data.length === 0) {
     return { updated: false, reason: `No entry found for ${ticker} on ${exchange}` };
   }
-  wl.entries[idx] = { ...wl.entries[idx], ...patch };
-  await saveWatchlist(wl);
-  return { updated: true, entry: wl.entries[idx] };
+  return { updated: true, entry: rowToEntry(data[0] as Row) };
 }

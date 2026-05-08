@@ -13,7 +13,7 @@ Personal equity watchlist with thesis grading. Deploy on Vercel, drive from anyw
 ## Architecture
 
 - Next.js 14 App Router (TypeScript)
-- Upstash Redis (via Vercel Marketplace) for storage — single key `watchlist:v1`
+- Supabase (Postgres) for storage — table `watchlist_entries`, one row per entry
 - Yahoo Finance for prices (no API key needed, server-side fetch)
 - Single shared bearer token for all access (you, the skill, anyone you share the URL+token with)
 
@@ -36,13 +36,11 @@ git push -u origin main
 - Import the repo
 - Don't deploy yet — set up env vars first
 
-### 3. Add Upstash Redis (via Vercel Marketplace)
+### 3. Provision Supabase
 
-Vercel KV is no longer offered as a first-party product — provision Upstash Redis from the Marketplace instead.
-
-- In your Vercel project → Storage tab → Create Database → Marketplace → **Upstash Redis**
-- Choose a region close to you (London, Frankfurt for EU users)
-- Click "Connect Project" — this auto-populates `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` env vars, which `Redis.fromEnv()` picks up automatically
+- Create a project at https://supabase.com (or reuse an existing one)
+- Open the SQL editor and run [`scripts/schema.sql`](scripts/schema.sql) — creates the `watchlist_entries` table with constraints and the `updated_at` trigger
+- From Project Settings → API, grab `Project URL` and the `service_role` key (NOT the anon key — service role bypasses RLS and is server-side only)
 
 ### 4. Generate and set the watchlist token
 
@@ -51,9 +49,10 @@ Generate a random token:
 openssl rand -base64 32
 ```
 
-In Vercel → Settings → Environment Variables → add:
+In Vercel → Settings → Environment Variables → add (all three, applied to Production, Preview, Development):
 - `WATCHLIST_TOKEN` = the generated string
-- Apply to Production, Preview, Development
+- `SUPABASE_URL` = your Supabase project URL
+- `SUPABASE_SERVICE_ROLE_KEY` = the service-role key (keep secret — bypasses RLS)
 
 ### 5. Deploy
 
@@ -69,7 +68,7 @@ Open the `stock-watchlist` skill's `references/config.md` and set:
 
 ```bash
 cp .env.example .env.local
-# fill in UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN from Vercel dashboard, set WATCHLIST_TOKEN
+# fill in SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY, set WATCHLIST_TOKEN
 npm install
 npm run dev
 ```
@@ -141,3 +140,12 @@ Excess return is stock return minus benchmark return (^GSPC by default), both an
 - All prices fetched live from Yahoo Finance on every `/api/list` call. No caching. If you have many entries this is fine — Vercel functions are fast.
 - Anchor date matching: closest trading day on or before the analysis date.
 - Currency-aware display (USD, GBP, GBp pence, EUR, AUD).
+- Tickers and exchange codes are uppercased on insert/update to enforce case-insensitive uniqueness.
+
+## Regression check
+
+After deploying, smoke-test the full add → list → update → remove cycle:
+
+```bash
+BASE_URL=https://idea-watchlist.vercel.app TOKEN=your-token ./scripts/test-api.sh
+```
